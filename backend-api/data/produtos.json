@@ -1,0 +1,30 @@
+[
+  {
+    "id": "1",
+    "name": "Whey Protein",
+    "description": "Proteína de soro de leite concentrada e isolada, ideal para recuperação muscular.",
+    "price": 89.90,
+    "category": "proteinas",
+    "brand": "Gold Standard",
+    "estoque_atual": 50,
+    "weight": 0.9,
+    "slug": "whey-protein",
+    "imagens": [
+      { "url": "/uploads/produtos/whey-1.jpg", "principal": true }
+    ]
+  },
+  {
+    "id": "2",
+    "name": "Creatina Monohidratada",
+    "description": "Suplemento para aumento de força e massa muscular.",
+    "price": 59.90,
+    "category": "creatinas",
+    "brand": "Max Titanium",
+    "estoque_atual": 0,
+    "weight": 0.3,
+    "slug": "creatina-monohidratada",
+    "imagens": [
+      { "url": "/uploads/produtos/creatina-1.jpg", "principal": true }
+    ]
+  }
+]
