@@ -53,7 +53,7 @@ curl -X PUT http://localhost:3000/api/marketing-config \
 
 ### 2. Configurações Visuais (`/api/configuracoes-visuais`)
 
-Este endpoint retorna as configurações de layout da loja (logo, banners, etc.), lidas do arquivo `configuracoes-visuais.json`.
+Este endpoint gerencia as configurações de layout da loja (logo, banners, etc.), persistindo os dados no arquivo `configuracoes-visuais.json`.
 
 #### GET /api/configuracoes-visuais
 
@@ -63,6 +63,18 @@ Retorna o JSON de configurações visuais.
 
 ```bash
 curl http://localhost:3000/api/configuracoes-visuais
+```
+
+#### PUT /api/configuracoes-visuais
+
+Atualiza o JSON de configuração, mesclando o corpo da requisição com o arquivo existente.
+
+**Exemplo:**
+
+```bash
+curl -X PUT http://localhost:3000/api/configuracoes-visuais \
+  -H "Content-Type: application/json" \
+  -d '{"logo": {"alt": "Nova Logo Alt Text"}}'
 ```
 
 ### 3. Feed Google Merchant (`/api/feed-google.json`)
@@ -82,9 +94,18 @@ curl http://localhost:3000/api/feed-google.json
 **Observação para o Merchant Center:**
 Ao configurar a fonte de dados no Google Merchant Center, utilize a URL completa deste endpoint (ex: `http://SEU_DOMINIO:3000/api/feed-google.json`).
 
-### 4. Webhook PagSeguro (Esqueleto) (`/api/webhooks/pagseguro`)
+### 4. Webhook PagSeguro (`/api/webhooks/pagseguro`)
 
-Este endpoint recebe notificações do PagSeguro. Atualmente, ele apenas loga o payload recebido no diretório `logs/`.
+Este endpoint recebe notificações do PagSeguro. Ele loga o payload recebido no diretório `logs/` e, se configurado, envia um evento de `purchase` para o Google Analytics 4 (GA4) via Measurement Protocol.
+
+**Configuração GA4 (Variáveis de Ambiente):**
+
+Para ativar a integração com o GA4, defina as seguintes variáveis de ambiente (veja `.env.example`):
+
+| Variável | Descrição |
+| :--- | :--- |
+| `GA4_MEASUREMENT_ID` | O ID de Medição (ex: G-XXXXXXXXXX) |
+| `GA4_API_SECRET` | A Chave Secreta da API (criada no GA4) |
 
 #### POST /api/webhooks/pagseguro
 
@@ -95,7 +116,31 @@ Recebe o payload do webhook.
 ```bash
 curl -X POST http://localhost:3000/api/webhooks/pagseguro \
   -H "Content-Type: application/json" \
-  -d '{"notificationCode":"ABC123XYZ","type":"transaction"}'
+  -d '{"transaction_id":"123456", "value": 150.00, "currency": "BRL"}'
+```
+
+**Payload de Exemplo Enviado ao GA4 (Mockado):**
+
+O backend simula a extração de dados do pedido e envia o seguinte formato ao GA4:
+
+```json
+{
+  "client_id": "<uuidv4>",
+  "events": [
+    {
+      "name": "purchase",
+      "params": {
+        "transaction_id": "<id>",
+        "value": "<total>",
+        "currency": "BRL",
+        "items": [
+          { "item_id": "1", "item_name": "Whey Protein", "price": 89.90, "quantity": 1 },
+          { "item_id": "3", "item_name": "Coqueteleira", "price": 30.60, "quantity": 1 }
+        ]
+      }
+    }
+  ]
+}
 ```
 
 ### 5. Arquivos Estáticos (`/uploads`)

@@ -1,1 +1,7 @@
 2025-10-25T22:42:36.663Z | {"notificationCode":"ABC123XYZ","type":"transaction"}
+2025-10-25T22:46:06.309Z | [WEBHOOK] | {"notificationCode":"TESTE_GA4_IGNORADO"}
+2025-10-25T22:46:06.309Z | [GA4] | Ignorado. Variáveis GA4 não definidas.
+2025-10-25T22:46:12.656Z | [WEBHOOK] | {"transaction_id":"TESTE_GA4_ERRO","value":10}
+2025-10-25T22:46:12.728Z | [GA4] | Sucesso (204 No Content).
+2025-10-25T22:46:15.776Z | [WEBHOOK] | {"transaction_id":"TESTE_GA4_ERRO","value":10}
+2025-10-25T22:46:15.852Z | [GA4] | Sucesso (204 No Content).

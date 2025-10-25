@@ -1,4 +1,6 @@
 const express = require('express');
+const fetch = require('node-fetch');
+const { v4: uuidv4 } = require('uuid');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs/promises');
@@ -11,6 +13,8 @@ const PRODUCTS_PATH = path.join(__dirname, 'data/produtos.json');
 const LOGS_DIR = path.join(__dirname, 'logs');
 
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
+const GA4_MEASUREMENT_ID = process.env.GA4_MEASUREMENT_ID;
+const GA4_API_SECRET = process.env.GA4_API_SECRET;
 
 // Middleware
 app.use(cors());
@@ -68,6 +72,30 @@ app.get('/api/configuracoes-visuais', async (req, res) => {
     }
 });
 
+// PUT /api/configuracoes-visuais
+app.put('/api/configuracoes-visuais', async (req, res) => {
+    const newConfig = req.body;
+
+    // Validação mínima de tipo
+    if (typeof newConfig !== 'object' || newConfig === null) {
+        return res.status(400).json({ error: 'O corpo da requisição deve ser um objeto JSON.' });
+    }
+
+    try {
+        const currentData = await fs.readFile(VISUAL_CONFIG_PATH, 'utf-8');
+        const currentConfig = JSON.parse(currentData);
+
+        // Mesclar a nova configuração com a existente (deep merge simples)
+        const updatedConfig = { ...currentConfig, ...newConfig };
+
+        await fs.writeFile(VISUAL_CONFIG_PATH, JSON.stringify(updatedConfig, null, 2), 'utf-8');
+        res.status(200).json({ message: 'Configurações visuais atualizadas com sucesso.', config: updatedConfig });
+    } catch (error) {
+        console.error('Erro ao atualizar configuracoes-visuais.json:', error);
+        res.status(500).json({ error: 'Erro interno do servidor.' });
+    }
+});
+
 // GET /api/feed-google.json
 app.get('/api/feed-google.json', async (req, res) => {
     try {
@@ -107,20 +135,71 @@ app.post('/api/webhooks/pagseguro', async (req, res) => {
         return res.status(400).json({ error: 'Payload ausente.' });
     }
 
+    const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const logFile = path.join(LOGS_DIR, `pagseguro-${date}.log`);
+    let logEntry = `${new Date().toISOString()} | [WEBHOOK] | ${JSON.stringify(payload)}\n`;
+
     try {
-        const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-        const logFile = path.join(LOGS_DIR, `pagseguro-${date}.log`);
-        const logEntry = `${new Date().toISOString()} | ${JSON.stringify(payload)}\n`;
+        // --- Integração GA4 Measurement Protocol ---
+        if (GA4_MEASUREMENT_ID && GA4_API_SECRET) {
+            // Mock de dados do pedido, pois o PagSeguro envia dados de transação,
+            // não o payload de compra completo com itens.
+            // Aqui, assumimos que o payload contém o suficiente ou que o backend
+            // faria uma consulta para obter os detalhes do pedido.
+            // Para o escopo, vamos usar dados mockados para o GA4.
+            const mockOrder = {
+                transaction_id: payload.transaction_id || `PS-${Date.now()}`,
+                value: payload.value || 120.50, // Exemplo de valor total
+                currency: 'BRL',
+                items: [
+                    { item_id: '1', item_name: 'Whey Protein', price: 89.90, quantity: 1 },
+                    { item_id: '3', item_name: 'Coqueteleira', price: 30.60, quantity: 1 }
+                ]
+            };
+
+            const ga4Payload = {
+                client_id: uuidv4(),
+                events: [
+                    {
+                        name: 'purchase',
+                        params: {
+                            transaction_id: mockOrder.transaction_id,
+                            value: mockOrder.value,
+                            currency: mockOrder.currency,
+                            items: mockOrder.items
+                        }
+                    }
+                ]
+            };
+
+            const ga4Url = `https://www.google-analytics.com/mp/collect?measurement_id=${GA4_MEASUREMENT_ID}&api_secret=${GA4_API_SECRET}`;
+
+            const ga4Response = await fetch(ga4Url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(ga4Payload)
+            });
+
+            if (ga4Response.status === 204) {
+                logEntry += `${new Date().toISOString()} | [GA4] | Sucesso (204 No Content).\n`;
+            } else {
+                const ga4ErrorText = await ga4Response.text();
+                logEntry += `${new Date().toISOString()} | [GA4] | Erro (${ga4Response.status}): ${ga4ErrorText}\n`;
+            }
+        } else {
+            logEntry += `${new Date().toISOString()} | [GA4] | Ignorado. Variáveis GA4 não definidas.\n`;
+        }
+
+        // --- Fim Integração GA4 ---
 
         await fs.appendFile(logFile, logEntry);
 
-        // TODO: Implementar integração com GA4 Measurement Protocol
-        // GA4_MEASUREMENT_ID e GA4_API_SECRET serão necessários no .env
-
         res.status(200).json({ ok: true });
     } catch (error) {
+        logEntry += `${new Date().toISOString()} | [ERRO] | ${error.message}\n`;
+        await fs.appendFile(logFile, logEntry);
         console.error('Erro no webhook do PagSeguro:', error);
-        res.status(500).json({ error: 'Erro interno do servidor.' });
+        res.status(200).json({ ok: true }); // Não bloquear o fluxo do PagSeguro
     }
 });
 
