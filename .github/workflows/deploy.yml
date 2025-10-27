@@ -1,139 +1,156 @@
-name: Deploy Flora (debug-simple)
-
+name: Deploy to VPS
 on:
-  workflow_dispatch:
   push:
-    branches: [ main ]
+    branches: [ main, master ]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node for build
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      # ===== BUILD (apenas se existir) =====
-      - name: Build store (if present)
-        if: ${{ hashFiles('loja-virtual/package.json') != '' }}
-        working-directory: loja-virtual
-        env:
-          VITE_API_BASE: http://72.60.5.89:3000
-        run: |
-          npm ci
-          npm run build
-
-      - name: Build admin (if present)
-        if: ${{ hashFiles('admin-frontend/package.json') != '' }}
-        working-directory: admin-frontend
-        env:
-          VITE_API_BASE: http://72.60.5.89:3000
-        run: |
-          npm ci
-          npm run build
-
-      # ===== SONDAS: testa SSH e caminho =====
-      - name: Create probe file
-        run: echo "probe-$(date -u +%Y%m%dT%H%M%SZ)" > PROBE.txt
-
-      - name: Upload probe (checks SSH + path)
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          password: ${{ secrets.SSH_PASSWORD }}
-          port: '22'
-          debug: 'true'
-          source: "PROBE.txt"
-          target: ${{ secrets.REMOTE_PATH }}
-
-      - name: Remote check (whoami, pwd, ls)
+      # --- PRECHECK: Testa conexão SSH ---
+      - name: Test SSH connection
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           password: ${{ secrets.SSH_PASSWORD }}
-          port: '22'
+          port: 22
+          script: |
+            echo "✅ Conexão SSH estabelecida com sucesso!"
+            echo "Usuário: $(whoami)"
+            echo "Diretório: $(pwd)"
+            echo "Home: $HOME"
+
+      # --- PRECHECK: Cria diretórios remotos ---
+      - name: Create remote directories
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
           script: |
             set -e
-            echo "== whoami =="; whoami
-            echo "== HOME =="; echo "$HOME"
-            echo "== REMOTE_PATH = ${{ secrets.REMOTE_PATH }} =="
-            ls -la "${{ secrets.REMOTE_PATH }}" || (echo "REMOTE_PATH inexistente" && exit 2)
-            echo "== PROBE =="
-            cat "${{ secrets.REMOTE_PATH }}/PROBE.txt" || true
+            REMOTE_PATH="${{ secrets.REMOTE_PATH }}"
+            echo "Criando diretórios em: $REMOTE_PATH"
+            
+            mkdir -p "$REMOTE_PATH/loja-virtual" \
+                     "$REMOTE_PATH/admin-frontend" \
+                     "$REMOTE_PATH/backend-api"
+            
+            echo "Estrutura criada:"
+            ls -la "$REMOTE_PATH"
 
-      # ===== UPLOADS (sem sudo, diretório do aless) =====
-      - name: Upload store dist (if present)
+      # --- BUILD: Loja Virtual ---
+      - name: Build Loja Virtual
+        if: ${{ hashFiles('loja-virtual/**') != '' }}
+        run: |
+          cd loja-virtual
+          npm install
+          npm run build
+        shell: bash
+
+      # --- BUILD: Admin Frontend ---
+      - name: Build Admin Frontend
+        if: ${{ hashFiles('admin-frontend/**') != '' }}
+        run: |
+          cd admin-frontend
+          npm install
+          npm run build
+        shell: bash
+
+      # --- UPLOAD: Frontends ---
+      - name: Upload store dist
         if: ${{ hashFiles('loja-virtual/dist/**') != '' }}
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           password: ${{ secrets.SSH_PASSWORD }}
-          port: '22'
-          source: "loja-virtual/dist/**"
+          source: "loja-virtual/dist/*"
           target: "${{ secrets.REMOTE_PATH }}/loja-virtual"
+          strip_components: 2
 
-      - name: Upload admin dist (if present)
+      - name: Upload admin dist
         if: ${{ hashFiles('admin-frontend/dist/**') != '' }}
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           password: ${{ secrets.SSH_PASSWORD }}
-          port: '22'
-          source: "admin-frontend/dist/**"
+          source: "admin-frontend/dist/*"
           target: "${{ secrets.REMOTE_PATH }}/admin-frontend"
+          strip_components: 2
 
-      - name: Upload backend (recursive, ignoring node_modules)
+      # --- UPLOAD: Backend ---
+      - name: Upload backend
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           password: ${{ secrets.SSH_PASSWORD }}
-          port: '22'
-          source: |
-            backend-api/**/*
-            !backend-api/node_modules/**/*
+          source: "backend-api/"
           target: "${{ secrets.REMOTE_PATH }}/backend-api"
-          overwrite: true
-          rm: false
+          strip_components: 1
 
-      # ===== START BACKEND (nohup, sem sudo) =====
-      - name: Start backend (nohup node)
+      # --- DEPLOY: Backend ---
+      - name: Deploy backend
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           password: ${{ secrets.SSH_PASSWORD }}
-          port: '22'
           script: |
             set -e
             APP_DIR="${{ secrets.REMOTE_PATH }}/backend-api"
             cd "$APP_DIR"
-            echo "== Node check =="
-            if ! command -v node >/dev/null 2>&1; then echo "❌ node não encontrado no PATH do usuário"; exit 3; fi
-            node -v
-
-            echo "== kill anterior (se houver) =="
-            if [ -f app.pid ]; then
-              PID=$(cat app.pid || true)
-              if [ -n "$PID" ] && ps -p "$PID" > /dev/null 2>&1; then kill "$PID" || true; sleep 1; fi
+            
+            echo "📋 Verificando ambiente..."
+            echo "Node version: $(node -v || echo 'Node não encontrado')"
+            echo "NPM version: $(npm -v || echo 'NPM não encontrado')"
+            echo "Diretório: $(pwd)"
+            ls -la
+            
+            # Para processo anterior
+            if [ -f app.pid ] && [ -n "$(cat app.pid)" ]; then
+              echo "🛑 Parando processo anterior..."
+              kill $(cat app.pid) 2>/dev/null || true
+              sleep 2
+            fi
+            
+            # Instala dependências
+            echo "📦 Instalando dependências..."
+            npm ci --omit=dev
+            
+            # Inicia aplicação
+            echo "🚀 Iniciando backend..."
+            nohup node index.js > app.out 2> app.err < /dev/null & echo $! > app.pid
+            
+            # Verifica se subiu
+            sleep 3
+            if ps -p $(cat app.pid) > /dev/null; then
+              echo "✅ Backend iniciado! PID: $(cat app.pid)"
+              echo "Últimas linhas do log:"
+              tail -n 10 app.out || true
+            else
+              echo "❌ Falha ao iniciar backend"
+              echo "Log de erro:"
+              tail -n 50 app.err || true
+              exit 1
             fi
 
-            echo "== npm ci =="
-            npm ci --omit=dev
-
-            echo "== start =="
-            nohup node index.js > app.out 2> app.err < /dev/null & echo $! > app.pid
-
-            echo "== status =="
-            sleep 1
-            ps -p "$(cat app.pid)" -o pid,cmd || (echo "❌ processo não subiu"; tail -n 100 app.err; exit 4)
-            echo "✅ Backend iniciado (PID $(cat app.pid))"
-            tail -n 50 app.out || true
+      # --- DEPLOY: Frontends (Nginx config) ---
+      - name: Setup Nginx (exemplo)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          script: |
+            echo "🎯 Configuração de deploy completada!"
+            echo "Frontends disponíveis em:"
+            echo "- Loja: ${{ secrets.REMOTE_PATH }}/loja-virtual"
+            echo "- Admin: ${{ secrets.REMOTE_PATH }}/admin-frontend"
+            echo "Backend rodando na porta configurada no index.js"
