@@ -1,33 +1,21 @@
-name: Deploy to VPS - Base64 Fix
-on:
-  push:
-    branches: [ main, master ]
+name: Test SSH Key Connection
+on: [push]
 
 jobs:
-  deploy:
+  test-ssh:
     runs-on: ubuntu-latest
-    
     steps:
-      - uses: actions/checkout@v4
-
-      # --- DECODE da senha ---
-      - name: Decode password
-        id: decode-password
-        run: |
-          DECODED_PASSWORD=$(echo "${{ secrets.SSH_PASSWORD }}" | base64 --decode)
-          echo "DECODED_PASSWORD=$DECODED_PASSWORD" >> $GITHUB_OUTPUT
-          echo "✅ Senha decodificada (tamanho: ${#DECODED_PASSWORD} caracteres)"
-
-      # --- TESTE SSH ---
-      - name: Test SSH connection
+      - name: Test SSH with Key
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
-          password: ${{ steps.decode-password.outputs.DECODED_PASSWORD }}
+          key: ${{ secrets.SSH_KEY }}
           port: 22
           script: |
-            echo "🎉 CONEXÃO SSH BEM-SUCEDIDA!"
+            echo "🎉 🎉 🎉 CONEXÃO SSH BEM-SUCEDIDA! 🎉 🎉 🎉"
             echo "Usuário: $(whoami)"
             echo "Diretório: $(pwd)"
-            ls -la
+            echo "Home: $HOME"
+            echo "Data/hora: $(date)"
+            echo "✅ Tudo funcionando perfeitamente!"
