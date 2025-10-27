@@ -39,7 +39,7 @@ jobs:
       # ===== PACK (sempre empacota backend; frontends só se dist existir) =====
       - name: Pack backend
         run: |
-          tar -czf backend-api.tgz backend-api --exclude='backend-api/node_modules'
+          tar --exclude='backend-api/node_modules' -czf backend-api.tgz backend-api
 
       - name: Pack store
         if: ${{ hashFiles('loja-virtual/dist/**') != '' }}
