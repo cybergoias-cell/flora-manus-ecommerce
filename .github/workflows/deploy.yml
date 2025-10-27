@@ -1,0 +1,58 @@
+name: Deploy Flora
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build store
+        working-directory: loja-virtual
+        env:
+          VITE_API_BASE: http://72.60.5.89:3000
+        run: |
+          npm ci
+          npm run build
+      - name: Build admin
+        working-directory: admin-frontend
+        env:
+          VITE_API_BASE: http://72.60.5.89:3000
+        run: |
+          npm ci
+          npm run build
+      - name: Pack artifacts
+        run: |
+          tar -czf store-dist.tgz -C loja-virtual dist
+          tar -czf admin-dist.tgz -C admin-frontend dist
+          tar -czf backend-api.tgz backend-api --exclude='backend-api/node_modules'
+      - name: Copy artifacts to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          source: "store-dist.tgz,admin-dist.tgz,backend-api.tgz"
+          target: "${{ secrets.REMOTE_PATH }}"
+      - name: Deploy on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            set -e
+            cd "${{ secrets.REMOTE_PATH }}"
+            mkdir -p loja-virtual admin-frontend backend-api
+            tar -xzf store-dist.tgz -C loja-virtual --strip-components=1
+            tar -xzf admin-dist.tgz -C admin-frontend --strip-components=1
+            tar -xzf backend-api.tgz -C backend-api
+            cd backend-api
+            npm ci --omit=dev
+            pm2 start index.js --name flora-backend || pm2 restart flora-backend
