@@ -1,45 +1,65 @@
 name: Deploy Flora
+
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
+
+      # ===== BUILD (só se o projeto existir) =====
       - name: Build store
+        if: ${{ hashFiles('loja-virtual/package.json') != '' }}
         working-directory: loja-virtual
         env:
           VITE_API_BASE: http://72.60.5.89:3000
         run: |
           npm ci
           npm run build
+
       - name: Build admin
+        if: ${{ hashFiles('admin-frontend/package.json') != '' }}
         working-directory: admin-frontend
         env:
           VITE_API_BASE: http://72.60.5.89:3000
         run: |
           npm ci
           npm run build
-      - name: Pack artifacts
+
+      # ===== PACK (sempre empacota backend; frontends só se dist existir) =====
+      - name: Pack backend
         run: |
-          tar -czf store-dist.tgz -C loja-virtual dist
-          tar -czf admin-dist.tgz -C admin-frontend dist
           tar -czf backend-api.tgz backend-api --exclude='backend-api/node_modules'
+
+      - name: Pack store
+        if: ${{ hashFiles('loja-virtual/dist/**') != '' }}
+        run: tar -czf store-dist.tgz -C loja-virtual dist
+
+      - name: Pack admin
+        if: ${{ hashFiles('admin-frontend/dist/**') != '' }}
+        run: tar -czf admin-dist.tgz -C admin-frontend dist
+
+      # ===== SCP: envia apenas o que existir =====
       - name: Copy artifacts to server
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
-          source: "store-dist.tgz,admin-dist.tgz,backend-api.tgz"
+          source: "*.tgz"
           target: "${{ secrets.REMOTE_PATH }}"
+
+      # ===== Deploy remoto (extrai condicionalmente) =====
       - name: Deploy on server
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -49,9 +69,11 @@ jobs:
           script: |
             set -e
             cd "${{ secrets.REMOTE_PATH }}"
-            mkdir -p loja-virtual admin-frontend backend-api
-            tar -xzf store-dist.tgz -C loja-virtual --strip-components=1
-            tar -xzf admin-dist.tgz -C admin-frontend --strip-components=1
+            mkdir -p backend-api
+            # extrai frontends só se os tgz existirem
+            if [ -f store-dist.tgz ]; then mkdir -p loja-virtual && tar -xzf store-dist.tgz -C loja-virtual --strip-components=1; fi
+            if [ -f admin-dist.tgz ]; then mkdir -p admin-frontend && tar -xzf admin-dist.tgz -C admin-frontend --strip-components=1; fi
+            # backend sempre
             tar -xzf backend-api.tgz -C backend-api
             cd backend-api
             npm ci --omit=dev
