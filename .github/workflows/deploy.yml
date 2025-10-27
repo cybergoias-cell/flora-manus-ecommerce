@@ -1,4 +1,4 @@
-name: Deploy to VPS
+name: Deploy to VPS - Base64 Fix
 on:
   push:
     branches: [ main, master ]
@@ -10,25 +10,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # --- DEBUG: Verificar secrets ---
-      - name: Debug secrets
+      # --- DECODE da senha ---
+      - name: Decode password
+        id: decode-password
         run: |
-          echo "SSH_HOST: ${{ secrets.SSH_HOST }}"
-          echo "SSH_USER: ${{ secrets.SSH_USER }}"
-          echo "REMOTE_PATH: ${{ secrets.REMOTE_PATH }}"
-          echo "SSH_PASSWORD length: ${#SECRET_PASSWORD}" 
-        env:
-          SECRET_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+          DECODED_PASSWORD=$(echo "${{ secrets.SSH_PASSWORD }}" | base64 --decode)
+          echo "DECODED_PASSWORD=$DECODED_PASSWORD" >> $GITHUB_OUTPUT
+          echo "✅ Senha decodificada (tamanho: ${#DECODED_PASSWORD} caracteres)"
 
-      # --- TESTE SIMPLES de conexão ---
+      # --- TESTE SSH ---
       - name: Test SSH connection
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
-          password: ${{ secrets.SSH_PASSWORD }}
+          password: ${{ steps.decode-password.outputs.DECODED_PASSWORD }}
           port: 22
           script: |
-            echo "✅ Conexão SSH bem-sucedida!"
-            whoami
-            pwd
+            echo "🎉 CONEXÃO SSH BEM-SUCEDIDA!"
+            echo "Usuário: $(whoami)"
+            echo "Diretório: $(pwd)"
+            ls -la
