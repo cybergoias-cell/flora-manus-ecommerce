@@ -1,4 +1,57 @@
-      - name: Deploy backend (nohup node)
+name: Deploy Flora (debug-simple)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node for build
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # ===== BUILD (apenas se existir) =====
+      - name: Build store (if present)
+        if: ${{ hashFiles('loja-virtual/package.json') != '' }}
+        working-directory: loja-virtual
+        env:
+          VITE_API_BASE: http://72.60.5.89:3000
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build admin (if present)
+        if: ${{ hashFiles('admin-frontend/package.json') != '' }}
+        working-directory: admin-frontend
+        env:
+          VITE_API_BASE: http://72.60.5.89:3000
+        run: |
+          npm ci
+          npm run build
+
+      # ===== SONDAS: testa SSH e caminho =====
+      - name: Create probe file
+        run: echo "probe-$(date -u +%Y%m%dT%H%M%SZ)" > PROBE.txt
+
+      - name: Upload probe (checks SSH + path)
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: '22'
+          debug: 'true'
+          source: "PROBE.txt"
+          target: ${{ secrets.REMOTE_PATH }}
+
+      - name: Remote check (whoami, pwd, ls)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -7,19 +60,80 @@
           port: '22'
           script: |
             set -e
-            cd "${{ secrets.REMOTE_PATH }}/backend-api"
+            echo "== whoami =="; whoami
+            echo "== HOME =="; echo "$HOME"
+            echo "== REMOTE_PATH = ${{ secrets.REMOTE_PATH }} =="
+            ls -la "${{ secrets.REMOTE_PATH }}" || (echo "REMOTE_PATH inexistente" && exit 2)
+            echo "== PROBE =="
+            cat "${{ secrets.REMOTE_PATH }}/PROBE.txt" || true
 
-            # mata processo anterior, se houver
+      # ===== UPLOADS (sem sudo, diretório do aless) =====
+      - name: Upload store dist (if present)
+        if: ${{ hashFiles('loja-virtual/dist/**') != '' }}
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: '22'
+          source: "loja-virtual/dist/**"
+          target: "${{ secrets.REMOTE_PATH }}/loja-virtual"
+
+      - name: Upload admin dist (if present)
+        if: ${{ hashFiles('admin-frontend/dist/**') != '' }}
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: '22'
+          source: "admin-frontend/dist/**"
+          target: "${{ secrets.REMOTE_PATH }}/admin-frontend"
+
+      - name: Upload backend (recursive, ignoring node_modules)
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: '22'
+          source: |
+            backend-api/**/*
+            !backend-api/node_modules/**/*
+          target: "${{ secrets.REMOTE_PATH }}/backend-api"
+          overwrite: true
+          rm: false
+
+      # ===== START BACKEND (nohup, sem sudo) =====
+      - name: Start backend (nohup node)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: '22'
+          script: |
+            set -e
+            APP_DIR="${{ secrets.REMOTE_PATH }}/backend-api"
+            cd "$APP_DIR"
+            echo "== Node check =="
+            if ! command -v node >/dev/null 2>&1; then echo "❌ node não encontrado no PATH do usuário"; exit 3; fi
+            node -v
+
+            echo "== kill anterior (se houver) =="
             if [ -f app.pid ]; then
               PID=$(cat app.pid || true)
-              if [ -n "$PID" ] && ps -p "$PID" > /dev/null 2>&1; then
-                kill "$PID" || true
-                sleep 1
-              fi
+              if [ -n "$PID" ] && ps -p "$PID" > /dev/null 2>&1; then kill "$PID" || true; sleep 1; fi
             fi
 
-            # instala dependências e sobe em background
+            echo "== npm ci =="
             npm ci --omit=dev
-            nohup node index.js >/dev/null 2>&1 & echo $! > app.pid
 
+            echo "== start =="
+            nohup node index.js > app.out 2> app.err < /dev/null & echo $! > app.pid
+
+            echo "== status =="
+            sleep 1
+            ps -p "$(cat app.pid)" -o pid,cmd || (echo "❌ processo não subiu"; tail -n 100 app.err; exit 4)
             echo "✅ Backend iniciado (PID $(cat app.pid))"
+            tail -n 50 app.out || true
